@@ -5,6 +5,7 @@ dependencies:
   - black
   - colorcet
   - imagecodecs
+  - imageio
   - napari
   - numpy
   - pyqtgraph
