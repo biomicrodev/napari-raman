@@ -1,9 +1,8 @@
-from typing import Optional
+from typing import Optional, Dict, Hashable, Any
 
-import colorcet as cc
 import numpy as np
 from napari import Viewer
-from napari.layers import Points
+from napari.layers import Points, Layer
 from napari.utils.events import Event
 from pyqtgraph import (
     PlotDataItem,
@@ -22,12 +21,12 @@ from qtpy.QtWidgets import (
     QSlider,
     QLabel,
     QStyle,
+    QGridLayout,
+    QSplitter,
+    QScrollArea,
 )
+from vispy.color import get_colormap
 from xarray import Dataset
-
-from napari_raman.utils import hex2float
-
-cmap = [hex2float(c) for c in cc.fire]
 
 
 class JumpSlider(QSlider):
@@ -86,6 +85,7 @@ class InspectorLine(InfiniteLine):
             adiff = np.abs(c.xData - mouseX)
             idx = np.argmin(adiff)
 
+            # set label side to avoid clipping at edges of viewport
             side = (
                 "left"
                 if (mouseX >= c.xData.min())
@@ -128,6 +128,24 @@ class SpectrumViewerWidget(QWidget):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
+        # attribute viewer
+        _label = QLabel()
+        _label.setText("<b>Acquisition Parameters</b>")
+        _label.setStyleSheet("font-size: 16pt")
+        _label.setAlignment(Qt.AlignCenter)
+
+        self.parametersLayout = QGridLayout()
+        _parametersLayout = QVBoxLayout()
+        _parametersLayout.addWidget(_label, stretch=0)
+        _parametersLayout.addSpacing(5)
+        _parametersLayout.addLayout(self.parametersLayout, stretch=0)
+        _parametersLayout.addWidget(QWidget(), stretch=1)
+        _parametersWidget = QWidget()
+        _parametersWidget.setLayout(_parametersLayout)
+        _parametersScrollArea = QScrollArea()
+        _parametersScrollArea.setWidget(_parametersWidget)
+        _parametersScrollArea.setWidgetResizable(True)
+
         # label for user experience purposes
         self.noPointSelectedLabel = QLabel(self)
         self.noPointSelectedLabel.setMinimumWidth(300)
@@ -168,7 +186,16 @@ class SpectrumViewerWidget(QWidget):
         layout = QVBoxLayout()
         layout.addWidget(plotWidget, stretch=1)
         layout.addLayout(wavenumberLayout, stretch=0)
-        self.setLayout(layout)
+        layoutWidget = QWidget()
+        layoutWidget.setLayout(layout)
+
+        splitter = QSplitter()
+        splitter.setOrientation(Qt.Vertical)
+        splitter.addWidget(_parametersScrollArea)
+        splitter.addWidget(layoutWidget)
+        splitterLayout = QVBoxLayout()
+        splitterLayout.addWidget(splitter)
+        self.setLayout(splitterLayout)
 
     def resizeEvent(self, event: QResizeEvent):
         width = self.noPointSelectedLabel.rect().width()
@@ -181,27 +208,45 @@ class SpectrumViewerWidget(QWidget):
 
         super().resizeEvent(event)
 
+    def setAcquisitionParameters(self, dct: Dict[Hashable, Any]):
+        layout = self.parametersLayout
+        keys = sorted([key for key in dct.keys()])
+        for row, key in enumerate(keys):
+            keyLabel = QLabel()
+            keyLabel.setText("<b>" + str(key) + "</b>")
+            valueLabel = QLabel()
+            valueLabel.setText(str(dct[key]))
+
+            layout.addWidget(keyLabel, row, 0, Qt.AlignRight)
+            layout.addWidget(valueLabel, row, 1, Qt.AlignLeft)
+            layout.setRowStretch(row, 0)
+
 
 class SpectrumViewer:
-    def __init__(self, viewer: Viewer, data: Dataset):
+    def __init__(self, viewer: Viewer, dataset: Dataset, cmap: str = "viridis"):
+        self.viewer = viewer
         self._view = SpectrumViewerWidget()
+        self._view.setAcquisitionParameters(dataset.attrs)
 
-        self.data = data
-
+        self._current_layer: Optional[Layer] = None
         self._current_index: Optional[int] = None
 
         # init points
-        coordinates = np.asarray(data["coordinates"].values.tolist())
-        coordinates = np.flip(coordinates, axis=1)  # XY to YX
+        self.dataset = dataset
+        coords = np.asarray(dataset["coords"].values.tolist())
+        coords = np.flip(coords, axis=1)  # XY to YX
 
-        self.points_layer: Points = viewer.add_points(
-            coordinates, name="Raman raster", size=50, edge_color="#888"
+        self.layer: Points = viewer.add_points(
+            coords, size=20, edge_color="gray", name="Raman raster"
         )
-        self.points_layer.events.highlight.connect(self.on_select)
+        self.layer.events.highlight.connect(self.on_select)
+
+        self.cmap = get_colormap(cmap)
 
         # init spectrum
-        n = np.asarray(data["wavenumber"]).shape[0]
-        self._view.slider.setRange(0, n - 1)
+        self.wavenumbers = dataset["wavenumber"].values.tolist()
+
+        self._view.slider.setRange(0, len(self.wavenumbers) - 1)
         self._view.slider.valueChanged.connect(lambda _: self.update_wavenumber())
         self.update_wavenumber()
         self.on_select()
@@ -209,43 +254,49 @@ class SpectrumViewer:
     def update_wavenumber(self):
         # update plot
         index = self._view.slider.value()
-        wavenumbers = np.asarray(self.data["wavenumber"])
-        wavenumber = wavenumbers[index]
+        wavenumber = self.wavenumbers[index]
 
         self._view.label.setText(f"{wavenumber:.1f} cm<sup>-1</sup>")
         self._view.vLine.setPos(wavenumber)
 
         # update points
-        at_wavenumber = self.data.sel(wavenumber=wavenumber)
+        at_wavenumber = self.dataset.sel(wavenumber=wavenumber)
         intensity = np.copy(np.asarray(at_wavenumber["intensity"]))
-        intensity[intensity < 0] = 0
-        intensity /= intensity.max()
-        intensity *= 255
-        intensity = intensity.astype(int)
+        intensity = np.ma.array(intensity, mask=intensity <= 0)
+        intensity = np.ma.log(intensity)
 
-        colors = [cmap[v] for v in intensity]
-        self.points_layer.face_color = colors
+        min_val = intensity.min()
+        max_val = intensity.max()
+
+        intensity -= min_val
+        intensity /= max_val - min_val
+        intensity = intensity.filled(np.nan)
+        intensity = intensity[..., np.newaxis]
+
+        colors = self.cmap.map(intensity)
+        self.layer.face_color = colors
 
     def on_select(self, event: Event = None):
-        selected_data = self.points_layer.selected_data
+        selected_data = self.layer.selected_data
         if len(selected_data) == 0:
-            _current_point = None
+            print("no point selected")
             return
         else:
             self._view.noPointSelectedLabel.setVisible(False)
 
         # pick first point
         index = sorted(list(selected_data))[0]
-        if index == self._current_index:
+        if not self._current_index != index:
             return
 
         self._current_index = index
 
         # update graph
-        coordinates = self.data["coordinates"][index]
-        at_coordinates = self.data.sel(coordinates=coordinates)
+        coords = self.dataset["coords"][index]
+        at_coordinates = self.dataset.sel(coords=coords)
         wavenumber = at_coordinates["wavenumber"]
         intensity = at_coordinates["intensity"]
 
         self._view.plot.setData(wavenumber, intensity)
         self._view.vLine._onMoved()
+        print("updated")
