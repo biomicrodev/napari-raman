@@ -14,3 +14,6 @@ dependencies:
   - qtpy
   - tifffile
   - xarray
+  - pip
+  - pip:
+    - git+git://github.com/biomicrodev/common.git#egg=bmd_common
