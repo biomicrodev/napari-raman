@@ -1,0 +1,34 @@
+[project]
+name = 'napari-raman'
+version = '0.0.1'
+description = 'Raman spectroscopy in napari'
+readme = "README.md"
+requires-python = '>=3.7'
+license = { file = "LICENSE" }
+authors = [{ name = 'Sebastian Ahn' }]
+keywords = [
+    'raman microscopy',
+    'raman spectroscopy',
+    'spectroscopy'
+]
+classifiers = [
+    "Development Status :: 1 - Planning",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3",
+]
+dependencies = [
+    'colorcet',
+    'imagecodecs',
+    'imageio',
+    'napari[pyside2]',
+    'numpy',
+    'pyqtgraph',
+    'pyside2',
+    'qtpy',
+    'scipy',
+    'scikit-learn',
+    'tifffile',
+    'xarray',
+]
