@@ -262,15 +262,15 @@ class SpectrumViewer:
         # update points
         at_wavenumber = self.dataset.sel(wavenumber=wavenumber)
         intensity = np.copy(np.asarray(at_wavenumber["intensity"]))
-        intensity = np.ma.array(intensity, mask=intensity <= 0)
-        intensity = np.ma.log(intensity)
+        # intensity = np.ma.array(intensity, mask=intensity <= 0)
+        # intensity = np.ma.log(intensity)
 
         min_val = intensity.min()
         max_val = intensity.max()
 
         intensity -= min_val
         intensity /= max_val - min_val
-        intensity = intensity.filled(np.nan)
+        # intensity = intensity.filled(np.nan)
         intensity = intensity[..., np.newaxis]
 
         colors = self.cmap.map(intensity)
